@@ -39,7 +39,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getAuth, signInWithRedirect, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getAuth, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -60,7 +60,7 @@
         let currentUser = null;
         let currentUserData = null;
 
-        // 구글 로그인 실행 함수 (불필요한 괄호 찌꺼기 완벽하게 삭제 완료)
+        // 구글 로그인 실행 함수
         window.login = function() {
             signInWithRedirect(auth, provider);
         };
@@ -224,9 +224,19 @@
             });
         }
 
-        onAuthStateChanged(auth, (user) => {
-            if (user) { checkRole(user); } 
-            else { showView('loginView'); }
+        // 로그인 리디렉션 결과 강제 트래킹 및 도르마무 방지 로직
+        getRedirectResult(auth).then((result) => {
+            if (result && result.user) {
+                checkRole(result.user);
+            } else {
+                onAuthStateChanged(auth, (user) => {
+                    if (user) { checkRole(user); } 
+                    else { showView('loginView'); }
+                });
+            }
+        }).catch((error) => {
+            console.error("리디렉션 인증 실패:", error);
+            showView('loginView');
         });
     </script>
 </head>
