@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>코치마이웨이 통합 행정 시스템</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+            background-color: #f4f6f9; 
+            color: #333; 
+        }
+        .card { 
+            border: 1px solid #d1d3e2; 
+            border-radius: 0.35rem; 
+            background-color: #ffffff;
+        }
+        .table th { 
+            background-color: #f8f9fc; 
+            color: #4e73df; 
+            font-weight: bold;
+            border-bottom: 2px solid #e3e6f0;
+        }
+        
+        @media (max-width: 768px) {
+            .container { max-width: 100%; padding: 12px; }
+            .mobile-full { width: 100% !important; }
+            .pc-only { display: none !important; }
+            .btn-lg { padding: 15px; font-size: 1.1rem; }
+        }
+        @media (min-width: 769px) {
+            .pc-layout { max-width: 1280px; margin: 0 auto; }
+            .mobile-only { display: none !important; }
+        }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, signInWithRedirect, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAM3NMehubFHjGSGd2D_1IB6FxFhvuL3rE",
+            authDomain: "coachmyway-fe9bb.firebaseapp.com",
+            databaseURL: "https://coachmyway-fe9bb-default-rtdb.firebaseio.com",
+            projectId: "coachmyway-fe9bb",
+            storageBucket: "coachmyway-fe9bb.firebasestorage.app",
+            messagingSenderId: "51608733810",
+            appId: "1:51608733810:web:0643b8d4ffa9477d9cdaeb"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+
+        let currentUser = null;
+        let currentUserData = null;
+
+        // 구글 로그인 실행 함수 (불필요한 괄호 찌꺼기 완벽하게 삭제 완료)
+        window.login = function() {
+            signInWithRedirect(auth, provider);
+        };
+
+        // 로그아웃 처리
+        window.logout = function() {
+            signOut(auth).then(() => { showView('loginView'); });
+        };
+
+        // 사용자 역할 및 서랍 데이터 검증 분기
+        async function checkRole(user) {
+            currentUser = user;
+            const userDoc = await getDoc(doc(db, "Users", user.uid));
+            
+            if (!userDoc.exists()) {
+                document.getElementById("regUid").value = user.uid;
+                document.getElementById("regEmail").value = user.email;
+                showView('registerView');
+            } else {
+                currentUserData = userDoc.data();
+                if (currentUserData.role === "admin") {
+                    loadAdminDashboard();
+                    showView('adminView');
+                } else if (currentUserData.role === "instructor") {
+                    loadInstructorView();
+                    showView('instructorView');
+                } else if (currentUserData.role === "assistant") {
+                    showView('assistantView');
+                }
+            }
+        }
+
+        // 최초 1회 가입 및 정산 지침 동의서 제출
+        window.submitRegister = async function(e) {
+            e.preventDefault();
+            const uid = document.getElementById("regUid").value;
+            const email = document.getElementById("regEmail").value;
+            const realName = document.getElementById("regName").value;
+            const role = document.getElementById("regRole").value;
+            const jobType = document.getElementById("regJobType").value;
+
+            if (!realName.trim()) {
+                return alert("정산에 필요한 본명을 정확히 입력해 주세요.");
+            }
+
+            await setDoc(doc(db, "Users", uid), {
+                uid: uid,
+                email: email,
+                realName: realName,
+                role: role,
+                jobType: (role === "instructor") ? jobType : "none",
+                agreedToTerms: true
+            });
+
+            alert("가입 및 서약 등록이 완료되었습니다. 보안 승인을 위해 다시 로그인해 주세요.");
+            logout();
+        };
+
+        // 직무 선택창 UI 동적 제어 함수
+        window.toggleJobType = function(val) {
+            const div = document.getElementById("jobTypeDiv");
+            div.style.display = (val === "instructor") ? "block" : "none";
+        };
+
+        // [강사 기능] QR 스캔 연동 지각 검수 및 준비 시간 연산 수식
+        window.processCheckIn = async function() {
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0]; 
+            const dateStr = now.toISOString().split('T')[0];  
+            
+            const scheduleStartStr = "19:00"; 
+            const [sHour, sMin] = scheduleStartStr.split(':').map(Number);
+            
+            let limitTime = new Date();
+            limitTime.setHours(sHour, sMin, 0);
+
+            if (currentUserData.jobType === "checker") {
+                limitTime.setMinutes(limitTime.getMinutes() - 15);
+            } else {
+                limitTime.setMinutes(limitTime.getMinutes() - 10);
+            }
+
+            let prepTimeResult = "0:05"; 
+            if (now <= limitTime) {
+                prepTimeResult = (currentUserData.jobType === "checker") ? "0:15" : "0:10";
+            }
+
+            const docId = dateStr.replace(/-/g, '') + "_" + currentUser.uid;
+            await setDoc(doc(db, "Attendance", docId), {
+                date: dateStr,
+                uid: currentUser.uid,
+                realName: currentUserData.realName,
+                role: currentUserData.role,
+                jobType: currentUserData.jobType,
+                checkInTime: timeStr,
+                prepTime: prepTimeResult,
+                kakaoReportChecked: false,
+                managerConfirmed: false
+            }, { merge: true });
+
+            alert(`출근 등록 성공: ${timeStr}\n준비 시간 [${prepTimeResult}] 처리 완료.`);
+            loadInstructorView();
+        };
+
+        function loadInstructorView() {
+            console.log("강사 모바일 화면 로드 완료");
+        }
+
+        // [운영실장 기능] 대시보드 출력
+        async function loadAdminDashboard() {
+            const q = query(collection(db, "Attendance"));
+            const querySnapshot = await getDocs(q);
+            const tbody = document.getElementById("adminTableBody");
+            tbody.innerHTML = "";
+
+            querySnapshot.forEach((res) => {
+                const data = res.data();
+                const tr = document.createElement("tr");
+                
+                tr.innerHTML = `
+                    <td>${data.date}</td>
+                    <td class="fw-bold">${data.realName} (${data.jobType || data.role})</td>
+                    <td>${data.checkInTime || '-'}</td>
+                    <td>${data.checkOutTime || '-'}</td>
+                    <td>
+                        <select class="form-select form-select-sm text-center mx-auto" style="max-width: 100px;" onchange="updatePrepTime('${res.id}', this.value)">
+                            <option value="0:15" ${data.prepTime === '0:15' ? 'selected' : ''}>0:15</option>
+                            <option value="0:10" ${data.prepTime === '0:10' ? 'selected' : ''}>0:10</option>
+                            <option value="0:05" ${data.prepTime === '0:05' ? 'selected' : ''}>0:05</option>
+                        </select>
+                    </td>
+                    <td>
+                        <input type="checkbox" class="form-check-input" ${data.kakaoReportChecked ? 'checked' : ''} 
+                               onchange="updateKakaoStatus('${res.id}', this.checked)">
+                    </td>
+                    <td>
+                        <input type="checkbox" class="form-check-input" ${data.managerConfirmed ? 'checked' : ''} 
+                               onchange="updateManagerConfirm('${res.id}', this.checked)">
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        window.updatePrepTime = async function(id, val) {
+            await updateDoc(doc(db, "Attendance", id), { prepTime: val });
+        };
+
+        window.updateKakaoStatus = async function(id, checked) {
+            await updateDoc(doc(db, "Attendance", id), { kakaoReportChecked: checked });
+        };
+
+        window.updateManagerConfirm = async function(id, checked) {
+            await updateDoc(doc(db, "Attendance", id), { managerConfirmed: checked });
+        };
+
+        function showView(viewId) {
+            ['loginView', 'registerView', 'adminView', 'instructorView', 'assistantView'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el) el.style.display = (id === viewId) ? 'block' : 'none';
+            });
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) { checkRole(user); } 
+            else { showView('loginView'); }
+        });
+    </script>
+</head>
+<body class="bg-light">
+
+    <div class="container py-4 pc-layout">
+        
+        <div id="loginView" class="card shadow-sm p-4 mx-auto text-center" style="max-width: 420px; display: none; margin-top: 12%;">
+            <h5 class="mb-2 fw-bold text-dark">코치마이웨이 통합 행정 시스템</h5>
+            <p class="text-muted small mb-4">정산 데이터 보호 및 대리 출근 차단을 위해 소셜 인증을 진행해 주세요.</p>
+            <button onclick="login()" class="btn btn-dark w-100 py-2.5 small fw-bold">Google 계정 로그인</button>
+        </div>
+
+        <div id="registerView" class="card shadow-sm p-4 mx-auto" style="max-width: 480px; display: none;">
+            <h6 class="fw-bold mb-3 border-bottom pb-2 text-primary">사용자 신규 등록 및 급여 지침 동의</h6>
+            <form onsubmit="submitRegister(event)">
+                <input type="hidden" id="regUid">
+                <input type="hidden" id="regEmail">
+                
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">성함 (급여 정산용 실명)</label>
+                    <input type="text" id="regName" class="form-control form-control-sm" required placeholder="예: 김다연">
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">직무 권한 구분</label>
+                    <select id="regRole" class="form-select form-select-sm" onchange="toggleJobType(this.value)">
+                        <option value="instructor">강사 (프리랜서)</option>
+                        <option value="assistant">조교</option>
+                        <option value="admin">관리자 (운영실장)</option>
+                    </select>
+                </div>
+                
+                <div class="mb-3" id="jobTypeDiv">
+                    <label class="form-label small fw-bold">강사 담당 세부 파트</label>
+                    <select id="regJobType" class="form-select form-select-sm">
+                        <option value="checker">체커 (준비 시간 15분 전 출근 기준)</option>
+                        <option value="actor">액터 (준비 시간 10분 전 출근 기준)</option>
+                        <option value="pt">PT (준비 시간 10분 전 출근 기준)</option>
+                    </select>
+                </div>
+                
+                <div class="mb-3 bg-light p-3 border rounded small text-secondary" style="max-height: 140px; overflow-y: auto;">
+                    <div class="fw-bold text-dark mb-1">근무 기록 및 정산 세칙 필독 지침</div>
+                    <div>1. 당월 정산된 급여는 익월 10일에 일괄 지급됩니다. (연휴 시 익영업일)</div>
+                    <div>2. 월말 마감 이후 익월로 이월될 경우 데이터 수정 및 소급 적용이 절대 불가능합니다.</div>
+                    <div>3. 강사/조교 본인의 수기 오기입 및 기록 누락으로 인한 정산 누락은 본사에서 책임지지 않습니다.</div>
+                </div>
+                
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="regAgree" required>
+                    <label class="form-check-label small text-muted" for="regAgree">위 정산 세칙 및 마감 외 수정 불가 조항을 숙지했으며 이에 동의합니다.</label>
+                </div>
+                
+                <button type="submit" class="btn btn-primary btn-sm w-100 py-2">등록 및 서약 완료</button>
+            </form>
+        </div>
+
+        <div id="adminView" class="card shadow-sm p-4" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
+                <h5 class="fw-bold text-dark m-0">운영실장 총괄 대시보드 (검수 모드)</h5>
+                <button onclick="logout()" class="btn btn-outline-secondary btn-sm px-3">시스템 로그아웃</button>
+            </div>
+            
+            <div class="table-responsive">
+                <table class="table table-bordered align-middle small text-center m-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 12%;">근무 일자</th>
+                            <th style="width: 15%;">담당자 성함 (직무)</th>
+                            <th style="width: 12%;">실제 출근시간</th>
+                            <th style="width: 12%;">실제 퇴근시간</th>
+                            <th style="width: 15%;">준비 시간 (지각시 0:05 자동)</th>
+                            <th style="width: 17%;">익일 카톡 마무리보고 검수</th>
+                            <th style="width: 17%;">관리자 최종 승인 (장부 마감)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="instructorView" class="card shadow-sm p-4 mx-auto text-center" style="max-width: 440px; display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4 border-bottom pb-2">
+                <h6 class="fw-bold text-dark m-0">강사 포털</h6>
+                <button onclick="logout()" class="btn btn-light btn-sm text-muted">로그아웃</button>
+            </div>
+            
+            <div class="d-grid gap-3 mb-4">
+                <button onclick="processCheckIn()" class="btn btn-success btn-lg py-3 fw-bold mobile-full shadow-sm">데스크 QR 출근 등록</button>
+                <button class="btn btn-outline-secondary btn-lg py-3 fw-bold mobile-full">업무 종료 퇴근 등록</button>
+            </div>
+            
+            <div class="border rounded p-3 bg-light text-start small">
+                <div class="fw-bold text-secondary mb-2">금일 배정 학생 타임라인 및 수기 정산 칸</div>
+                <div class="text-muted text-center py-4 border-top">Schedules 바인딩 연동 구역 (개발 예정)</div>
+            </div>
+        </div>
+
+        <div id="assistantView" class="card shadow-sm p-4 mx-auto text-center" style="max-width: 440px; display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4 border-bottom pb-2">
+                <h6 class="fw-bold text-dark m-0">조교 미션 대시보드</h6>
+                <button onclick="logout()" class="btn btn-light btn-sm text-muted">로그아웃</button>
+            </div>
+            
+            <div id="AssistantChecklist" class="p-4 border rounded bg-light mb-4">
+                <p class="text-muted small my-3">조교 오픈 루틴 퀘스트 내역<br>(체크리스트 항목 추가 대기 중)</p>
+            </div>
+            
+            <button class="btn btn-primary w-100 py-2.5 fw-bold shadow-sm">조교 일일 업무 제출</button>
+        </div>
+
+    </div>
+
+</body>
+</html>
